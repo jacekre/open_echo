@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Open Echo — Odtwarzacz</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #0a0a0a; color: #ddd;
+      font-family: system-ui, sans-serif;
+      overflow: hidden;
+      touch-action: none;
+    }
+
+    /* ── Górny pasek kontrolny ── */
+    #bar {
+      position: fixed; top: 0; left: 0; right: 0;
+      height: 52px;
+      background: #111;
+      border-bottom: 1px solid #333;
+      display: flex; align-items: center; gap: 8px;
+      padding: 0 10px;
+      z-index: 20;
+    }
+
+    #bar a {
+      color: #0fc; font-size: 13px; text-decoration: none;
+      padding: 4px 8px; border: 1px solid #0fc;
+      border-radius: 6px; white-space: nowrap;
+    }
+
+    #file-select {
+      flex: 1;
+      background: #222; color: #eee;
+      border: 1px solid #444; border-radius: 6px;
+      padding: 4px 8px; font-size: 13px;
+      min-width: 0;
+    }
+
+    .ctrl-btn {
+      height: 36px; padding: 0 12px;
+      background: #333; color: #fff;
+      border: 1px solid #555; border-radius: 6px;
+      font-size: 18px; cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      white-space: nowrap; flex-shrink: 0;
+    }
+    .ctrl-btn:active { background: #555; }
+    .ctrl-btn:disabled { opacity: 0.35; cursor: default; }
+
+    #speed-select {
+      background: #222; color: #eee;
+      border: 1px solid #444; border-radius: 6px;
+      padding: 4px 6px; font-size: 13px;
+      flex-shrink: 0;
+    }
+
+    /* ── Pasek postępu ── */
+    #progress-bar {
+      position: fixed; top: 52px; left: 0; right: 0;
+      height: 4px; background: #222; z-index: 20;
+    }
+    #progress-fill {
+      height: 100%; background: #0fc;
+      width: 0%; transition: width 0.1s linear;
+    }
+
+    /* ── Info pod paskiem ── */
+    #info-bar {
+      position: fixed; top: 56px; left: 0; right: 0;
+      height: 28px;
+      background: rgba(0,0,0,0.7);
+      display: flex; align-items: center;
+      padding: 0 10px; gap: 16px;
+      font-size: 11px; color: #888;
+      z-index: 15;
+    }
+    #info-depth  { color: #0fc; font-weight: bold; font-size: 13px; }
+    #info-status { margin-left: auto; }
+    #info-status.playing { color: #4c4; }
+    #info-status.done    { color: #aaa; }
+    #info-status.err     { color: #f44; }
+
+    /* ── Canvas ── */
+    #waterfall, #overlay {
+      position: fixed;
+      top: 84px; left: 0;
+      width: 100%;
+      height: calc(100vh - 84px);
+      image-rendering: pixelated;
+    }
+    #overlay { pointer-events: none; z-index: 5; }
+
+    /* ── Zoom ── */
+    #zoom-wrap {
+      position: fixed; left: 8px;
+      top: calc(84px + 50%);
+      transform: translateY(-50%);
+      display: flex; flex-direction: column;
+      align-items: center; gap: 4px;
+      z-index: 10;
+    }
+    .zbtn {
+      width: 44px; height: 44px;
+      font-size: 26px; line-height: 44px; text-align: center;
+      background: rgba(255,255,255,0.15);
+      color: #fff; border: 1px solid rgba(255,255,255,0.3);
+      border-radius: 8px; cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+    .zbtn:active { background: rgba(255,255,255,0.35); }
+    #range-lbl { font-size: 10px; color: #aaa; text-align: center; }
+
+    /* ── Cursor ── */
+    #cursor-lbl {
+      position: fixed; bottom: 10px; left: 10px; z-index: 10;
+      font-size: 13px; color: #fa0;
+      background: rgba(0,0,0,0.5);
+      padding: 2px 8px; border-radius: 6px;
+      pointer-events: none;
+    }
+
+    /* ── Ticki ── */
+    .tick {
+      position: fixed; left: 58px; z-index: 8;
+      font-size: 11px; color: #ccc;
+      background: rgba(0,0,0,0.55);
+      padding: 0 4px; border-top: 1px solid #555;
+      pointer-events: none; white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Górny pasek -->
+<div id="bar">
+  <a href="/">&#8592; Live</a>
+  <select id="file-select"><option>-- wybierz plik --</option></select>
+  <button class="ctrl-btn" id="btn-play"  disabled>&#9654;</button>
+  <button class="ctrl-btn" id="btn-pause" disabled>&#9646;&#9646;</button>
+  <button class="ctrl-btn" id="btn-stop"  disabled>&#9632;</button>
+  <select id="speed-select">
+    <option value="0.25">0.25×</option>
+    <option value="0.5">0.5×</option>
+    <option value="1" selected>1×</option>
+    <option value="2">2×</option>
+    <option value="5">5×</option>
+    <option value="0">max</option>
+  </select>
+</div>
+
+<div id="progress-bar"><div id="progress-fill"></div></div>
+
+<!-- Info -->
+<div id="info-bar">
+  <span id="info-depth">-- m</span>
+  <span id="info-temp">-- °C</span>
+  <span id="info-vdrv">-- V</span>
+  <span id="info-frame">-- / --</span>
+  <span id="info-time">t=--s</span>
+  <span id="info-status">gotowy</span>
+</div>
+
+<!-- Canvas -->
+<canvas id="waterfall"></canvas>
+<canvas id="overlay"></canvas>
+
+<!-- Zoom -->
+<div id="zoom-wrap">
+  <button class="zbtn" id="zin">+</button>
+  <div id="range-lbl">--m</div>
+  <button class="zbtn" id="zout">−</button>
+</div>
+
+<div id="cursor-lbl">Cursor: -- m</div>
+<div id="ticks"></div>
+
+<script>
+// ── Viridis ───────────────────────────────────────────────────────────────────
+const CM = [
+  [68,1,84],[71,13,96],[72,25,107],[71,37,118],[69,48,128],
+  [65,59,135],[59,70,140],[53,80,143],[47,90,144],[42,100,142],
+  [37,110,142],[33,119,142],[30,128,141],[27,138,139],[26,148,135],
+  [27,158,129],[34,168,121],[45,177,112],[60,186,102],[78,193,91],
+  [97,199,79],[118,205,67],[140,210,56],[163,214,46],[186,217,39],
+  [208,219,35],[229,220,37],[247,220,44],[253,213,56],[252,201,67],
+  [249,188,78],[246,175,90],[242,162,102],[238,149,115],[234,137,127],
+  [229,124,140],[223,112,153],[216,100,166],[208,89,179],[199,78,191],
+  [189,67,203],[178,56,215],[165,46,225],[151,36,235],[136,26,244],
+  [120,17,251],[103,8,255],[85,1,255],[66,0,252],[47,0,245]
+];
+function cmap(t) {
+  const i = Math.min(CM.length-2, Math.floor(t*(CM.length-1)));
+  const f = t*(CM.length-1)-i, a=CM[i], b=CM[i+1];
+  return [a[0]+f*(b[0]-a[0]), a[1]+f*(b[1]-a[1]), a[2]+f*(b[2]-a[2])];
+}
+
+// ── Canvas ────────────────────────────────────────────────────────────────────
+const wf  = document.getElementById('waterfall');
+const ov  = document.getElementById('overlay');
+const wfx = wf.getContext('2d');
+const ovx = ov.getContext('2d');
+let W, H, img;
+
+function resize() {
+  const top = 84;
+  W = window.innerWidth;
+  H = window.innerHeight - top;
+  wf.width=W; wf.height=H;
+  ov.width=W; ov.height=H;
+  img = wfx.createImageData(W, H);
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ── Parametry ─────────────────────────────────────────────────────────────────
+const RANGES = [0.75, 1, 1.5, 2, 5];
+let ri = 3;  // default 2m
+let sampleRes = 0.01;
+
+function yRange()  { return RANGES[ri]; }
+function ySamp()   { return Math.max(1, Math.floor(yRange() / sampleRes)); }
+function s2px(s)   { return Math.round(s / ySamp() * H); }
+function px2s(py)  { return Math.min(ySamp()-1, Math.floor(py / H * ySamp())); }
+function px2d(py)  { return (py / H) * yRange(); }
+
+// Welford
+let gN=0, gM=0, gM2=0;
+function gadd(v) { gN++; const d=v-gM; gM+=d/gN; gM2+=d*(v-gM); }
+function gstd()  { return gN>1 ? Math.sqrt(gM2/(gN-1)) : 1; }
+
+function resetStats() { gN=0; gM=0; gM2=0; }
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function renderCol(samples, depthM) {
+  samples.forEach(gadd);
+  const lo=gM-2*gstd(), hi=gM+2*gstd(), sp=hi-lo||1;
+  const d=img.data, rb=W*4;
+  for (let r=0; r<H; r++) { const b=r*rb; d.copyWithin(b, b+4, b+rb); }
+  const ds = depthM / sampleRes;
+  for (let py=0; py<H; py++) {
+    const si=px2s(py), val=samples[si]??0, i=(py*W+W-1)*4;
+    if (Math.abs(si-ds) < 1.5) {
+      d[i]=255; d[i+1]=0; d[i+2]=0; d[i+3]=255;
+    } else {
+      const t=Math.max(0, Math.min(1, (val-lo)/sp));
+      const [r,g,b]=cmap(t); d[i]=r; d[i+1]=g; d[i+2]=b; d[i+3]=255;
+    }
+  }
+  wfx.putImageData(img, 0, 0);
+}
+
+// ── Ticki ─────────────────────────────────────────────────────────────────────
+function updateTicks() {
+  const c = document.getElementById('ticks');
+  c.innerHTML = '';
+  const canvasTop = wf.getBoundingClientRect().top;
+  for (let i=0; i<5; i++) {
+    const depth = (i/4)*yRange();
+    const py    = s2px(Math.round(depth/sampleRes));
+    const el    = document.createElement('div');
+    el.className   = 'tick';
+    el.textContent = depth.toFixed(1)+'m';
+    el.style.top   = (canvasTop + py) + 'px';
+    c.appendChild(el);
+  }
+  document.getElementById('range-lbl').textContent = yRange()+'m';
+}
+
+// ── Cursor ────────────────────────────────────────────────────────────────────
+ov.addEventListener('pointermove', e => {
+  const rect = ov.getBoundingClientRect();
+  const y = e.clientY - rect.top;
+  document.getElementById('cursor-lbl').textContent = 'Cursor: '+px2d(y).toFixed(2)+' m';
+  ovx.clearRect(0,0,W,H);
+  ovx.beginPath(); ovx.moveTo(0,y); ovx.lineTo(W,y);
+  ovx.strokeStyle='rgba(255,165,0,0.8)'; ovx.lineWidth=1.5; ovx.stroke();
+});
+ov.addEventListener('pointerleave', () => {
+  ovx.clearRect(0,0,W,H);
+  document.getElementById('cursor-lbl').textContent = 'Cursor: -- m';
+});
+
+// ── Zoom ──────────────────────────────────────────────────────────────────────
+document.getElementById('zin').addEventListener('click',  () => { if(ri>0) { ri--; updateTicks(); } });
+document.getElementById('zout').addEventListener('click', () => { if(ri<RANGES.length-1) { ri++; updateTicks(); } });
+
+// ── Lista plików ──────────────────────────────────────────────────────────────
+async function loadFileList() {
+  const sel = document.getElementById('file-select');
+  try {
+    const resp = await fetch('/recordings');
+    const files = await resp.json();
+    sel.innerHTML = '<option value="">-- wybierz plik --</option>';
+    files.forEach(f => {
+      const opt = document.createElement('option');
+      opt.value = f.name;
+      const kb  = (f.size / 1024).toFixed(0);
+      opt.textContent = `${f.name}  (${f.frames} ramek, ${kb} KB)`;
+      sel.appendChild(opt);
+    });
+  } catch(e) {
+    sel.innerHTML = '<option>błąd ładowania listy</option>';
+  }
+}
+loadFileList();
+
+// ── Odtwarzanie ───────────────────────────────────────────────────────────────
+let ws       = null;
+let paused   = false;
+let frameQueue = [];
+let playing  = false;
+
+const btnPlay  = document.getElementById('btn-play');
+const btnPause = document.getElementById('btn-pause');
+const btnStop  = document.getElementById('btn-stop');
+const statusEl = document.getElementById('info-status');
+
+function setStatus(text, cls) {
+  statusEl.textContent = text;
+  statusEl.className   = cls || '';
+}
+
+function stopPlayback() {
+  if (ws) { ws.close(); ws = null; }
+  paused  = false;
+  playing = false;
+  frameQueue = [];
+  btnPlay.disabled  = false;
+  btnPause.disabled = true;
+  btnStop.disabled  = true;
+  btnPause.textContent = '⏸';
+  document.getElementById('progress-fill').style.width = '0%';
+  setStatus('zatrzymano');
+}
+
+btnPlay.addEventListener('click', () => {
+  const filename = document.getElementById('file-select').value;
+  if (!filename) return;
+  startPlayback(filename);
+});
+
+btnPause.addEventListener('click', () => {
+  paused = !paused;
+  btnPause.textContent = paused ? '▶' : '⏸';
+  setStatus(paused ? 'pauza' : 'odtwarzanie', paused ? '' : 'playing');
+  if (!paused) drainQueue();
+});
+
+btnStop.addEventListener('click', stopPlayback);
+
+document.getElementById('file-select').addEventListener('change', () => {
+  stopPlayback();
+  btnPlay.disabled = !document.getElementById('file-select').value;
+});
+
+function startPlayback(filename) {
+  stopPlayback();
+  resetStats();
+
+  // Clear canvas
+  wfx.clearRect(0,0,W,H);
+  img = wfx.createImageData(W,H);
+
+  const speed = parseFloat(document.getElementById('speed-select').value);
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const url   = `${proto}://${location.host}/play/${encodeURIComponent(filename)}?speed=${speed}`;
+
+  ws = new WebSocket(url);
+  playing = true;
+  btnPlay.disabled  = true;
+  btnPause.disabled = false;
+  btnStop.disabled  = false;
+  setStatus('łączenie…');
+
+  ws.onmessage = e => {
+    const msg = JSON.parse(e.data);
+
+    if (msg.type === 'header') {
+      sampleRes = (msg.resolution ?? 1) / 100;
+      updateTicks();
+      setStatus('odtwarzanie', 'playing');
+      return;
+    }
+
+    if (msg.type === 'done') {
+      setStatus('zakończono', 'done');
+      btnPlay.disabled  = false;
+      btnPause.disabled = true;
+      btnStop.disabled  = true;
+      return;
+    }
+
+    if (msg.type === 'error') {
+      setStatus('błąd: ' + msg.error, 'err');
+      return;
+    }
+
+    if (msg.type === 'frame') {
+      if (!paused) {
+        renderFrame(msg);
+      } else {
+        frameQueue.push(msg);
+      }
+    }
+  };
+
+  ws.onerror = () => setStatus('błąd połączenia', 'err');
+  ws.onclose = () => { if (playing) setStatus('rozłączono', 'err'); };
+}
+
+function renderFrame(msg) {
+  sampleRes = (msg.resolution ?? 1) / 100;
+  renderCol(msg.spectrogram, msg.measured_depth ?? 0);
+  updateTicks();
+
+  document.getElementById('info-depth').textContent  = (msg.measured_depth??0).toFixed(2)+' m';
+  document.getElementById('info-temp').textContent   = (msg.temperature??0).toFixed(1)+' °C';
+  document.getElementById('info-vdrv').textContent   = (msg.drive_voltage??0).toFixed(1)+' V';
+  document.getElementById('info-frame').textContent  = (msg.frame+1)+' / '+msg.total_frames;
+  document.getElementById('info-time').textContent   = 't='+msg.timestamp+'s';
+
+  const pct = msg.total_frames > 0 ? ((msg.frame+1) / msg.total_frames * 100) : 0;
+  document.getElementById('progress-fill').style.width = pct.toFixed(1)+'%';
+}
+
+function drainQueue() {
+  while (!paused && frameQueue.length > 0) {
+    renderFrame(frameQueue.shift());
+  }
+}
+
+updateTicks();
+</script>
+</body>
+</html>

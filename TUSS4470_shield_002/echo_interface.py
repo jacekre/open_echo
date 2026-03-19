@@ -28,13 +28,13 @@ from PyQt5.QtWidgets import QApplication
 
 # Serial Configuration
 BAUD_RATE = 250000
-NUM_SAMPLES = 1800 # (X-axis)
+NUM_SAMPLES = 750 # (X-axis)
 
 MAX_ROWS = 300  # Number of time steps (Y-axis)
 Y_LABEL_DISTANCE = 50  # distance between labels in cm
 
-SPEED_OF_SOUND = 1440  # default sound speed meters/second in water
-# SPEED_OF_SOUND = 343  # default sound speed meters/second in water
+# SPEED_OF_SOUND = 1440  # default sound speed meters/second in water
+SPEED_OF_SOUND = 343  # default sound speed meters/second in air
 
 # SAMPLE_TIME = 52.226e-6  # 13.2 microseconds on Atmega328 max sample speed plus 50 microseconds delay in sampling loop
 # SAMPLE_TIME = 47.0e-6
@@ -884,7 +884,16 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
 
     # Apply the dark theme
-    qdarktheme.setup_theme("dark")
+    try:
+        setup_theme = getattr(qdarktheme, "setup_theme", None)
+        if callable(setup_theme):
+            setup_theme("dark")
+        else:
+            from qdarktheme.base import load_stylesheet
+
+            app.setStyleSheet(load_stylesheet("dark"))
+    except Exception as exc:
+        print(f"Theme setup failed: {exc}")
     window = WaterfallApp()
 
     # window.showFullScreen()

@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>Open Echo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      width: 100%; height: 100%;
+      background: #000;
+      overflow: hidden;
+      font-family: system-ui, sans-serif;
+      touch-action: none;
+    }
+
+    #waterfall, #overlay {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      image-rendering: pixelated;
+    }
+    #overlay { pointer-events: none; z-index: 2; }
+
+    /* ── Górny lewy: głębokość ── */
+    #depth {
+      position: fixed; top: 10px; left: 10px; z-index: 10;
+      font-size: 48px; font-weight: 700;
+      color: #0fc;
+      text-shadow: 0 0 12px rgba(0,255,200,0.7);
+      pointer-events: none;
+    }
+    #meta {
+      position: fixed; top: 66px; left: 10px; z-index: 10;
+      font-size: 13px; color: #aaa;
+      pointer-events: none;
+    }
+
+    /* ── Górny prawy: status ── */
+    #status {
+      position: fixed; top: 10px; right: 10px; z-index: 10;
+      font-size: 11px; color: #888;
+      background: rgba(0,0,0,0.6);
+      padding: 3px 8px; border-radius: 6px;
+      pointer-events: none;
+    }
+    #status.ok  { color: #4c4; }
+    #status.err { color: #f44; }
+
+    /* ── REC — górny prawy pod statusem ── */
+    #rec-btn {
+      position: fixed; top: 40px; right: 10px; z-index: 10;
+      width: 52px; height: 52px;
+      border-radius: 50%;
+      background: #700;
+      border: 2px solid #a00;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #rec-btn:active { background: #f00; }
+    #rec-btn.on     { background: #d00; animation: pulse 1.2s infinite; }
+    @keyframes pulse {
+      0%,100% { box-shadow: 0 0 0 0 rgba(255,0,0,0.6); }
+      50%      { box-shadow: 0 0 0 10px rgba(255,0,0,0); }
+    }
+    #rec-dot {
+      width: 20px; height: 20px;
+      border-radius: 50%; background: #fff;
+      pointer-events: none;
+    }
+    #rec-btn.on #rec-dot { border-radius: 4px; width: 16px; height: 16px; }
+
+    #rec-label {
+      position: fixed; top: 98px; right: 10px; z-index: 10;
+      font-size: 10px; color: #888; text-align: right;
+      background: rgba(0,0,0,0.5);
+      padding: 2px 6px; border-radius: 4px;
+      pointer-events: none;
+      max-width: 180px;
+      line-height: 1.4;
+    }
+    #rec-label.on { color: #f66; }
+
+    /* ── Pause button ── */
+    #pause-btn {
+      position: fixed; top: 100px; right: 10px; z-index: 10;
+      width: 52px; height: 52px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: #fff; font-size: 22px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #pause-btn:active  { background: rgba(255,255,255,0.3); }
+    #pause-btn.paused  { background: rgba(255,180,0,0.3); border-color: #fa0; color: #fa0; }
+
+    /* ── Zoom — lewa środkowa ── */
+    #zoom-wrap {
+      position: fixed; left: 8px; top: 50%; z-index: 10;
+      transform: translateY(-50%);
+      display: flex; flex-direction: column;
+      align-items: center; gap: 4px;
+    }
+    .zbtn {
+      width: 44px; height: 44px;
+      font-size: 26px; line-height: 44px; text-align: center;
+      background: rgba(255,255,255,0.15);
+      color: #fff;
+      border: 1px solid rgba(255,255,255,0.3);
+      border-radius: 8px;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+    .zbtn:active { background: rgba(255,255,255,0.35); }
+    #range-lbl { font-size: 10px; color: #aaa; text-align: center; }
+
+    /* ── Dolny lewy: cursor ── */
+    #cursor-lbl {
+      position: fixed; bottom: 10px; left: 10px; z-index: 10;
+      font-size: 13px; color: #fa0;
+      background: rgba(0,0,0,0.5);
+      padding: 2px 8px; border-radius: 6px;
+      pointer-events: none;
+    }
+
+    /* ── Ticki głębokości ── */
+    .tick {
+      position: fixed; left: 58px; z-index: 10;
+      font-size: 11px; color: #ccc;
+      background: rgba(0,0,0,0.55);
+      padding: 0 4px;
+      border-top: 1px solid #555;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="waterfall"></canvas>
+<canvas id="overlay"></canvas>
+
+<div id="depth">-- m</div>
+<div id="meta">-- °C &nbsp; -- V</div>
+<div id="status">connecting…</div>
+
+<button id="rec-btn"><div id="rec-dot"></div></button>
+<div id="rec-label">nie nagrywa</div>
+<button id="pause-btn" title="Pauza">⏸</button>
+
+<div id="zoom-wrap">
+  <button class="zbtn" id="zin">+</button>
+  <div id="range-lbl">--m</div>
+  <button class="zbtn" id="zout">−</button>
+</div>
+
+<div id="cursor-lbl">Cursor: -- m</div>
+<div id="ticks"></div>
+
+<script>
+// ── Viridis 50pt ──────────────────────────────────────────────────────────────
+const CM = [
+  [68,1,84],[71,13,96],[72,25,107],[71,37,118],[69,48,128],
+  [65,59,135],[59,70,140],[53,80,143],[47,90,144],[42,100,142],
+  [37,110,142],[33,119,142],[30,128,141],[27,138,139],[26,148,135],
+  [27,158,129],[34,168,121],[45,177,112],[60,186,102],[78,193,91],
+  [97,199,79],[118,205,67],[140,210,56],[163,214,46],[186,217,39],
+  [208,219,35],[229,220,37],[247,220,44],[253,213,56],[252,201,67],
+  [249,188,78],[246,175,90],[242,162,102],[238,149,115],[234,137,127],
+  [229,124,140],[223,112,153],[216,100,166],[208,89,179],[199,78,191],
+  [189,67,203],[178,56,215],[165,46,225],[151,36,235],[136,26,244],
+  [120,17,251],[103,8,255],[85,1,255],[66,0,252],[47,0,245]
+];
+function cmap(t) {
+  const i = Math.min(CM.length-2, Math.floor(t*(CM.length-1)));
+  const f = t*(CM.length-1)-i, a=CM[i], b=CM[i+1];
+  return [a[0]+f*(b[0]-a[0]), a[1]+f*(b[1]-a[1]), a[2]+f*(b[2]-a[2])];
+}
+
+// ── Canvas ────────────────────────────────────────────────────────────────────
+const wf  = document.getElementById('waterfall');
+const ov  = document.getElementById('overlay');
+const wfx = wf.getContext('2d');
+const ovx = ov.getContext('2d');
+let W, H, img;
+
+function resize() {
+  W = window.innerWidth; H = window.innerHeight;
+  wf.width=W; wf.height=H; ov.width=W; ov.height=H;
+  img = wfx.createImageData(W, H);
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ── Parametry ─────────────────────────────────────────────────────────────────
+const RANGES = [0.75, 1, 1.5, 2, 5];
+let   ri     = 2;  // default 1.5m
+let   sampleRes = 0.01;   // m/sample, aktualizowane z serwera
+
+function yRange()  { return RANGES[ri]; }
+function ySamp()   { return Math.max(1, Math.floor(yRange() / sampleRes)); }
+function s2px(s)   { return Math.round(s / ySamp() * H); }
+function px2s(py)  { return Math.min(ySamp()-1, Math.floor(py / H * ySamp())); }
+function px2d(py)  { return (py / H) * yRange(); }
+
+// Welford auto-gain
+let gN=0, gM=0, gM2=0;
+function gadd(v) { gN++; const d=v-gM; gM+=d/gN; gM2+=d*(v-gM); }
+function gstd()  { return gN>1 ? Math.sqrt(gM2/(gN-1)) : 1; }
+
+let maxDepth = 0;
+
+// Pause
+let paused = false;
+const pauseBtn = document.getElementById('pause-btn');
+pauseBtn.addEventListener('click', () => {
+  paused = !paused;
+  pauseBtn.classList.toggle('paused', paused);
+  pauseBtn.textContent = paused ? '▶' : '⏸';
+  pauseBtn.title = paused ? 'Wznów' : 'Pauza';
+});
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function renderCol(samples, depthM) {
+  samples.forEach(gadd);
+  const lo=gM-2*gstd(), hi=gM+2*gstd(), sp=hi-lo||1;
+  const d=img.data, rb=W*4;
+  for (let r=0; r<H; r++) { const b=r*rb; d.copyWithin(b, b+4, b+rb); }
+  const ds = depthM / sampleRes;
+  for (let py=0; py<H; py++) {
+    const si=px2s(py), val=samples[si]??0, i=(py*W+W-1)*4;
+    if (Math.abs(si-ds) < 1.5) {
+      d[i]=255; d[i+1]=0; d[i+2]=0; d[i+3]=255;
+    } else {
+      const t=Math.max(0, Math.min(1, (val-lo)/sp));
+      const [r,g,b]=cmap(t); d[i]=r; d[i+1]=g; d[i+2]=b; d[i+3]=255;
+    }
+  }
+  wfx.putImageData(img, 0, 0);
+}
+
+// ── Ticki ─────────────────────────────────────────────────────────────────────
+function updateTicks() {
+  const c = document.getElementById('ticks');
+  c.innerHTML = '';
+  for (let i=0; i<5; i++) {
+    const depth = (i/4) * yRange();
+    const py    = s2px(Math.round(depth / sampleRes));
+    const el    = document.createElement('div');
+    el.className   = 'tick';
+    el.textContent = depth.toFixed(1) + 'm';
+    el.style.top   = py + 'px';
+    c.appendChild(el);
+  }
+  document.getElementById('range-lbl').textContent = yRange() + 'm';
+}
+
+// ── Cursor ────────────────────────────────────────────────────────────────────
+ov.addEventListener('pointermove', e => {
+  const y = e.clientY;
+  document.getElementById('cursor-lbl').textContent = 'Cursor: ' + px2d(y).toFixed(2) + ' m';
+  ovx.clearRect(0,0,W,H);
+  ovx.beginPath(); ovx.moveTo(0,y); ovx.lineTo(W,y);
+  ovx.strokeStyle='rgba(255,165,0,0.8)'; ovx.lineWidth=1.5; ovx.stroke();
+});
+ov.addEventListener('pointerleave', () => {
+  ovx.clearRect(0,0,W,H);
+  document.getElementById('cursor-lbl').textContent = 'Cursor: -- m';
+});
+
+// ── Zoom ──────────────────────────────────────────────────────────────────────
+document.getElementById('zin').addEventListener('click', () => {
+  if (ri > 0) { ri--; manualZoom = true; updateTicks(); }
+});
+document.getElementById('zout').addEventListener('click', () => {
+  if (ri < RANGES.length-1) { ri++; manualZoom = true; updateTicks(); }
+});
+
+// ── REC ───────────────────────────────────────────────────────────────────────
+const recBtn = document.getElementById('rec-btn');
+const recLbl = document.getElementById('rec-label');
+let   recOn  = false;
+
+recBtn.addEventListener('click', async () => {
+  const endpoint = recOn ? '/record/stop' : '/record/start';
+  try {
+    const resp = await fetch(endpoint, { method: 'POST' });
+    const data = await resp.json();
+    recOn = data.status === 'started';
+    recBtn.classList.toggle('on', recOn);
+    recLbl.className = recOn ? 'on' : '';
+    if (recOn) {
+      recLbl.innerHTML = '&#9679; ' + (data.filename ?? '') + '<br>0 ramek';
+    } else {
+      recLbl.innerHTML = 'zapisano:<br>' + (data.filename ?? '');
+    }
+  } catch(e) {
+    recLbl.textContent = 'błąd';
+  }
+});
+
+// Sync stanu REC z serwera przez WebSocket
+function syncRec(data) {
+  if (typeof data.recording === 'undefined') return;
+  recOn = data.recording;
+  recBtn.classList.toggle('on', recOn);
+  recLbl.className = recOn ? 'on' : '';
+  if (recOn) {
+    recLbl.innerHTML = '&#9679; ' + (data.rec_filename ?? '') + '<br>' + data.rec_frames + ' ramek';
+  } else if (data.rec_filename) {
+    recLbl.innerHTML = 'zapisano:<br>' + data.rec_filename;
+  }
+}
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+const statusEl = document.getElementById('status');
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws    = new WebSocket(`${proto}://${location.host}/ws`);
+
+  ws.onopen = () => {
+    statusEl.textContent = 'live';
+    statusEl.className   = 'ok';
+  };
+
+  ws.onmessage = e => {
+    const data = JSON.parse(e.data);
+
+    sampleRes = (data.resolution ?? 1) / 100;
+
+    const depth = data.measured_depth ?? 0;
+    if (depth > maxDepth) maxDepth = depth;
+
+    if (!paused) {
+      renderCol(data.spectrogram, depth);
+      updateTicks();
+    }
+
+    // HUD zawsze aktualizowany (nawet na pauzie)
+    document.getElementById('depth').textContent =
+      depth.toFixed(2) + ' m';
+    document.getElementById('meta').textContent =
+      (data.temperature ?? 0).toFixed(1) + ' °C   ' +
+      (data.drive_voltage ?? 0).toFixed(1) + ' V';
+
+    syncRec(data);
+  };
+
+  ws.onerror = () => { statusEl.textContent = 'error'; statusEl.className = 'err'; };
+  ws.onclose = () => {
+    statusEl.textContent = 'reconnecting…';
+    statusEl.className   = 'err';
+    setTimeout(connect, 2000);
+  };
+}
+
+connect();
+updateTicks();
+</script>
+</body>
+</html>
